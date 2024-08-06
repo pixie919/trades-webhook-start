@@ -8,12 +8,25 @@ from solders.pubkey import Pubkey
 from solana.rpc.api import Client
 import requests
 import json
-from dotenv import load_dotenv
+from env import load_dotenv
 
 # Load the .env file
 load_dotenv()
 
 app = Flask(__name__)
+
+rpc = "https://rpc.shyft.to?api_key=wabdmwccwozmXcR-" # Devnet RPC
+client = Client(rpc)
+payer = Keypair()
+mpg = "BRWNCEzQTm8kvEXHsVVY9jpb1VLbpv9B8mkF43nMLCtu" # Stakechip Devnet MPG Key
+market_product_group_key = Pubkey.from_string(mpg)
+
+ctx = SDKContext.connect(
+  client=client,
+  market_product_group_key=market_product_group_key,
+  payer=payer,
+  raise_on_error=True
+)
 
 @app.route('/', methods=['GET'])
 def status():
@@ -21,17 +34,36 @@ def status():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """
-    Recieves transaction data, parses it, proccess it and then sends it to the trade api to get executed
-    """
+    
+    data = request.get_json()
+    data = data[0]
+    if data.get("meta", {}).get("err") is not None:
+        return jsonify({'error': "Transaction failed"}), 400
+
+    try:   
+        handle_transaction(data)
+        return jsonify({"message": "Transaction processed"}), 200
+    except Exception as e:
+        print(f"Exception during transaction processing: {e}")
+        return jsonify({'error': "Transaction failed to process"}), 500
 
 
 def handle_transaction(tr: Dict[str, Any]):
-    """
-    Checks the given transaction object for fill events and calls the Trading API if found.
-    
-    :param tr: A dictionary representing the transaction.
-    """
+   def handle_transaction(tr: Dict[str, Any]):
+    events = ctx.parse_events_from_logs(tr.get("meta", {}).get("logMessages", []))
+    fill_events = [event for event in events if isinstance(event, OrderFillEvent)]
+
+    if fill_events:
+        parsed_trades = [event_to_trade_data(tr, event) for event in fill_events]
+
+        try:
+            for trade in parsed_trades:
+                print(trade)
+            print(f"Sent {len(parsed_trades)} trade events.")
+        except Exception as e:
+            print(f"Failed to send fill events due to error: {e}")
+    else:
+        print("No fill events found in transaction.")
 
 def event_to_trade_data(event: OrderFillEvent) -> Dict[str, Any]:
     """
